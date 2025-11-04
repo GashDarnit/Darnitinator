@@ -2,7 +2,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, 
     QApplication, 
     QListWidgetItem, 
-    QMainWindow, 
+    QMainWindow,
+    QScrollArea, 
     QStyle, 
     QWidget, 
     QVBoxLayout, 
@@ -19,6 +20,7 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from moviepy.editor import VideoFileClip
+from TimelineWidget import TimelineWidget
 import sys
 import os
 
@@ -26,6 +28,10 @@ import os
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.timeline = [] # holds media clips
+        self.current_time = 0.0 # playhead position
+
+
         self.setWindowTitle("Mini Video Editor")
         self.setGeometry(100, 100, 1000, 600)
 
@@ -106,7 +112,7 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(self.video_widget)
         preview_layout.addWidget(self.image_label)
 
-        # --- Media Player Setup ---
+        # Media Player
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
@@ -161,10 +167,17 @@ class MainWindow(QMainWindow):
         timeline_panel = QFrame()
         timeline_panel.setFrameShape(QFrame.Shape.StyledPanel)
         timeline_layout = QVBoxLayout(timeline_panel)
-        timeline_label = QLabel("Timeline Area")
-        timeline_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        timeline_label.setStyleSheet("background-color: #555; color: white; padding: 10px;")
-        timeline_layout.addWidget(timeline_label)
+
+        self.timeline_widget = TimelineWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        scroll.setWidget(self.timeline_widget)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        timeline_layout.addWidget(scroll)
+        self.timeline_widget.playhead_moved.connect(self.on_playhead_moved)
+
 
         vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         vertical_splitter.addWidget(top_splitter)
@@ -175,9 +188,6 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_image_display()
-
-
-
 
     def get_video_thumbnail(self, path, width=64, height=64):
         try:
@@ -228,23 +238,36 @@ class MainWindow(QMainWindow):
     def play_selected_media(self, item):
         file_name = item.text()
         file_path = os.path.join("test", file_name)
-
-        self.player.stop()
         ext = os.path.splitext(file_path)[1].lower()
 
+        # Determine clip duration
         if ext in (".png", ".jpg", ".jpeg"):
-            self.video_widget.hide()
-            self.image_label.show()
-
-            pixmap = QPixmap(file_path)
-            self.current_image = pixmap  # Store original pixmap for future scaling
-            self.update_image_display()
-
+            duration = 5.0
+            media_type = "image"
         else:
-            self.image_label.hide()
-            self.video_widget.show()
-            self.player.setSource(QUrl.fromLocalFile(file_path))
-            self.player.play()
+            media_type = "video"
+            try:
+                from moviepy.editor import VideoFileClip
+                with VideoFileClip(file_path) as clip:
+                    duration = clip.duration
+            except Exception as e:
+                print(f"Error reading video duration: {e}")
+                return
+
+        # Add clip to project timeline
+        self.timeline.append({
+            "path": file_path,
+            "start": self.current_time,
+            "duration": duration,
+            "type": media_type
+        })
+        self.timeline_widget.setTimeline(self.timeline)
+
+        # Advance playhead
+        self.current_time += duration
+        self.timeline_widget.setTimeline(self.timeline)
+        self.timeline_widget.setPlayheadPosition(self.current_time)
+
 
     def update_image_display(self):
         if hasattr(self, "current_image") and not self.current_image.isNull():
@@ -256,10 +279,63 @@ class MainWindow(QMainWindow):
             )
             self.image_label.setPixmap(scaled)
 
+    def on_playhead_moved(self, new_time):
+        self.current_time = new_time
+        self.timeline_widget.setPlayheadPosition(new_time)
+        self.show_media_at_time(new_time)
+        
 
+    def show_media_at_time(self, time_s: float):
+        active_clip = None
+        for clip in self.timeline:
+            start, dur = clip["start"], clip["duration"]
+            if start <= time_s < start + dur:
+                active_clip = clip
+                break
 
+        if not active_clip:
+            # nothing playing at this time
+            self.player.stop()
+            self.video_widget.hide()
+            self.image_label.hide()
+            return
 
+        path = active_clip["path"]
+        ext = os.path.splitext(path)[1].lower()
 
+        # Handle video files
+        if ext in (".mp4", ".mov", ".avi", ".mkv"):
+            # Only reload if it's a new video
+            if self.current_media_path() != path:
+                self.player.setSource(QUrl.fromLocalFile(path))
+            self.video_widget.show()
+            self.image_label.hide()
+            self.player.setPosition(int((time_s - active_clip["start"]) * 1000))
+            self.player.play()
+
+        # Handle images
+        elif ext in (".png", ".jpg", ".jpeg", ".gif"):
+            pixmap = QPixmap(path)
+            self.image_label.setPixmap(
+                pixmap.scaled(
+                    self.image_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+            )
+            self.image_label.show()
+            self.video_widget.hide()
+            self.player.stop()
+
+    def current_media_path(self):
+        src = self.player.source()
+        if isinstance(src, QUrl):
+            return src.toLocalFile()
+        elif isinstance(src, str):
+            return src
+        return ""
+
+    
 
 
 if __name__ == "__main__":

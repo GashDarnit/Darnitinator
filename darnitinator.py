@@ -14,7 +14,9 @@ from PyQt6.QtWidgets import (
     QSplitter
 )
 from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap, QIcon
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import QTimer, Qt, QSize, QUrl
+from PyQt6.QtMultimediaWidgets import QVideoWidget
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from moviepy.editor import VideoFileClip
 import sys
@@ -32,8 +34,6 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout(container)
 
         # TOP HALF (Media Panel + Video Preview)
-        top_half_layout = QHBoxLayout()
-
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left Half: Media Panel
@@ -42,18 +42,17 @@ class MainWindow(QMainWindow):
         media_layout = QVBoxLayout(media_panel)
         media_layout.addWidget(QLabel("Media"))
 
-        media_list = QListWidget()
-        media_list.setViewMode(QListWidget.ViewMode.IconMode)       # switch to grid layout
-        media_list.setIconSize(QSize(96, 96))                       # thumbnail size
-        media_list.setResizeMode(QListWidget.ResizeMode.Adjust)     # auto-adjust layout
-        media_list.setMovement(QListWidget.Movement.Static)         # fixed item positions
-        media_list.setSpacing(10)                                   # space between items
-        media_list.setWrapping(True)                                # allow wrapping to next row
-        media_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        media_list.setUniformItemSizes(True)
-        media_list.setGridSize(QSize(120, 120))
-        
-        media_layout.addWidget(media_list)
+        self.media_list = QListWidget()
+        self.media_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.media_list.setIconSize(QSize(96, 96))
+        self.media_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.media_list.setMovement(QListWidget.Movement.Static)
+        self.media_list.setSpacing(10)
+        self.media_list.setWrapping(True)
+        self.media_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.media_list.setUniformItemSizes(True)
+        self.media_list.setGridSize(QSize(120, 120))
+        media_layout.addWidget(self.media_list)
 
         # Temporary stuff for testing
         media_folder = "test"
@@ -82,12 +81,12 @@ class MainWindow(QMainWindow):
                             icon = window.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
                             item.setIcon(icon)
 
-                    media_list.addItem(item)
+                    self.media_list.addItem(item)
         else:
-            media_list.addItem("[Folder not found]")
+            self.media_list.addItem("[Folder not found]")
 
         # Adjust appearance
-        media_list.setIconSize(QSize(64, 64))
+        self.media_list.setIconSize(QSize(64, 64))
 
 
         # Right Half: Video Preview + Playback Controls
@@ -95,10 +94,23 @@ class MainWindow(QMainWindow):
         preview_panel.setFrameShape(QFrame.Shape.StyledPanel)
         preview_layout = QVBoxLayout(preview_panel)
 
-        preview_label = QLabel("Video Preview Area")
-        preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        preview_label.setStyleSheet("background-color: #333; color: white; padding: 10px;")
-        preview_layout.addWidget(preview_label)
+        self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background-color: #000;")
+
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("background-color: #000;")
+        self.image_label.hide()  # Hidden by default
+
+        # We'll toggle between the two layouts accordingly
+        preview_layout.addWidget(self.video_widget)
+        preview_layout.addWidget(self.image_label)
+
+        # --- Media Player Setup ---
+        self.player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.player.setAudioOutput(self.audio_output)
+        self.player.setVideoOutput(self.video_widget)
 
         # Playback Controls
         controls_layout = QHBoxLayout()
@@ -139,8 +151,10 @@ class MainWindow(QMainWindow):
 
         top_splitter.addWidget(media_panel)
         top_splitter.addWidget(preview_panel)
-        top_splitter.setSizes([300, 700])
-        top_half_layout.addWidget(top_splitter)
+        top_splitter.setStretchFactor(0, 35)
+        top_splitter.setStretchFactor(1, 65)
+
+        self.media_list.itemClicked.connect(self.play_selected_media)
 
 
         # BOTTOM HALF (Timeline) 
@@ -157,6 +171,13 @@ class MainWindow(QMainWindow):
         vertical_splitter.addWidget(timeline_panel)
         vertical_splitter.setSizes([500, 200])
         main_layout.addWidget(vertical_splitter)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_image_display()
+
+
+
 
     def get_video_thumbnail(self, path, width=64, height=64):
         try:
@@ -203,6 +224,42 @@ class MainWindow(QMainWindow):
             except OSError:
                 break
         return False
+    
+    def play_selected_media(self, item):
+        file_name = item.text()
+        file_path = os.path.join("test", file_name)
+
+        self.player.stop()
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext in (".png", ".jpg", ".jpeg"):
+            self.video_widget.hide()
+            self.image_label.show()
+
+            pixmap = QPixmap(file_path)
+            self.current_image = pixmap  # Store original pixmap for future scaling
+            self.update_image_display()
+
+        else:
+            self.image_label.hide()
+            self.video_widget.show()
+            self.player.setSource(QUrl.fromLocalFile(file_path))
+            self.player.play()
+
+    def update_image_display(self):
+        if hasattr(self, "current_image") and not self.current_image.isNull():
+            target_size = self.image_label.size()
+            scaled = self.current_image.scaled(
+                target_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_label.setPixmap(scaled)
+
+
+
+
+
 
 
 if __name__ == "__main__":

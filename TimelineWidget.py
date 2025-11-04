@@ -12,7 +12,6 @@ class TimelineWidget(QWidget):
         self.timeline = []  # list of clips
         self.pixels_per_second = 100  # zoom level
         self.track_height = 60
-        # self.current_time = 0.0 # Playhead time
         self.playhead_position = 0.0
         self.dragging_playhead = False
         self.setMinimumHeight(self.track_height + 20)
@@ -58,48 +57,55 @@ class TimelineWidget(QWidget):
     
     def setPlayheadPosition(self, time_sec):
         self.playhead_position = max(0.0, time_sec)
-        # self.current_time = time_sec
         self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            x = event.position().x()
+            x, y = event.position().x(), event.position().y()
             playhead_x = int(self.playhead_position * self.pixels_per_second)
+            clicked_clip = self.clip_at_pos(x, y)
 
-            # Check if the click is near the playhead (within ±5 px)
             if abs(x - playhead_x) <= 5:
-                # User clicked ON the playhead → enable dragging
+                # Dragging playhead
                 self.dragging_playhead = True
-            else:
-                # User clicked elsewhere → just move playhead instantly
+                self.dragging_clip = None
+            elif clicked_clip:
+                # Dragging clip
                 self.dragging_playhead = False
+                self.dragging_clip = clicked_clip
+                self.drag_offset = x - clicked_clip["start"] * self.pixels_per_second
+            else:
+                # Clicked empty space → move playhead
+                self.dragging_playhead = False
+                self.dragging_clip = None
                 new_time = max(0, x / self.pixels_per_second)
                 self.setPlayheadPosition(new_time)
                 self.playhead_moved.emit(new_time)
                 self.update()
-
-            # If clicked ON the playhead, still update position to allow immediate visual feedback
-            if self.dragging_playhead:
-                new_time = max(0, x / self.pixels_per_second)
-                self.setPlayheadPosition(new_time)
-                self.playhead_moved.emit(new_time)
-                self.update()
-
-
 
     def mouseMoveEvent(self, event):
+        x = event.position().x()
+
         if self.dragging_playhead:
-            x = event.position().x()
             x = max(0, min(x, self.width()))
             new_time = x / self.pixels_per_second
             self.setPlayheadPosition(new_time)
             self.playhead_moved.emit(new_time)
             self.update()
 
+        elif self.dragging_clip:
+            new_start = (x - self.drag_offset) / self.pixels_per_second
+            new_start = max(0, new_start)
+            self.dragging_clip["start"] = new_start
+            self.updateGeometry()
+            self.update()
+
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging_playhead = False
+            if hasattr(self, "dragging_clip") and self.dragging_clip:
+                self.dragging_clip = None
 
 
     def enterEvent(self, event):
@@ -107,6 +113,15 @@ class TimelineWidget(QWidget):
 
     def leaveEvent(self, event):
         self.unsetCursor()
+
+    def clip_at_pos(self, x, y):
+        for clip in self.timeline:
+            start_x = clip["start"] * self.pixels_per_second
+            width = clip["duration"] * self.pixels_per_second
+            rect = QRectF(start_x, 10, width, self.track_height)
+            if rect.contains(x, y):
+                return clip
+        return None
 
 
     

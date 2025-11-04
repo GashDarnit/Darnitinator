@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         self.current_time = 0.0 # playhead position
 
 
-        self.setWindowTitle("Mini Video Editor")
+        self.setWindowTitle("Darnitinator")
         self.setGeometry(100, 100, 1000, 600)
 
         container = QWidget()
